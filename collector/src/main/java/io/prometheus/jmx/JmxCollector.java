@@ -4,6 +4,7 @@ import io.prometheus.client.Collector;
 import io.prometheus.client.Counter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.StringWriter;
@@ -15,6 +16,8 @@ import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -27,7 +30,41 @@ import org.yaml.snakeyaml.Yaml;
 import static java.lang.String.format;
 
 public class JmxCollector extends Collector implements Collector.Describable {
-    static final Counter configReloadSuccess = Counter.build()
+    public static final long DELAY = 5 * 60 * 1000; // 5 minutes
+
+	public class JmxUrlFileMonitor {
+
+		private String url;
+		private Timer timer;
+		private String jmxUrlFile;
+
+		public JmxUrlFileMonitor(String jmxUrlFile) {
+			this.jmxUrlFile = jmxUrlFile;
+			timer = new Timer(true);
+			timer.schedule(new TimerTask() {
+				@Override
+				public void run() {
+					getUrlFromFile();
+				}
+			}, DELAY, DELAY);
+			getUrlFromFile();
+		}
+
+		private void getUrlFromFile() {
+			try (BufferedReader reader = new BufferedReader(new FileReader(jmxUrlFile))) {
+				url = reader.readLine();
+			} catch (Exception e) {
+				LOGGER.severe("JMX URL file read failed: " + e.toString());
+			}
+		}
+
+		public String getUrl() {
+			return url;
+		}
+
+	}
+
+	static final Counter configReloadSuccess = Counter.build()
       .name("jmx_config_reload_success_total")
       .help("Number of times configuration have successfully been reloaded.").register();
 
@@ -49,19 +86,24 @@ public class JmxCollector extends Collector implements Collector.Describable {
       ArrayList<String> labelValues;
     }
 
-    private static class Config {
-      Integer startDelaySeconds = 0;
-      String jmxUrl = "";
-      String username = "";
-      String password = "";
-      boolean ssl = false;
-      boolean lowercaseOutputName;
-      boolean lowercaseOutputLabelNames;
-      List<ObjectName> whitelistObjectNames = new ArrayList<ObjectName>();
-      List<ObjectName> blacklistObjectNames = new ArrayList<ObjectName>();
-      List<Rule> rules = new ArrayList<Rule>();
-      long lastUpdate = 0L;
-    }
+	private static class Config {
+		Integer startDelaySeconds = 0;
+		String jmxUrl = "";
+		String jmxUrlFile;
+		String username = "";
+		String password = "";
+		boolean ssl = false;
+		boolean lowercaseOutputName;
+		boolean lowercaseOutputLabelNames;
+		List<ObjectName> whitelistObjectNames = new ArrayList<ObjectName>();
+		List<ObjectName> blacklistObjectNames = new ArrayList<ObjectName>();
+		List<Rule> rules = new ArrayList<Rule>();
+		long lastUpdate = 0L;
+
+		public String getJmxUrl() {
+			return (jmxUrlFile != null) ? getJmxUrlFromFile(jmxUrlFile) : jmxUrl;
+		}
+	}
 
     private Config config;
     private File configFile;
@@ -122,8 +164,9 @@ public class JmxCollector extends Collector implements Collector.Describable {
           cfg.jmxUrl ="service:jmx:rmi:///jndi/rmi://" + (String)yamlConfig.get("hostPort") + "/jmxrmi";
         } else if (yamlConfig.containsKey("jmxUrl")) {
           cfg.jmxUrl = (String)yamlConfig.get("jmxUrl");
+        } else if (yamlConfig.containsKey("jmxUrlFile")) {
+        	cfg.jmxUrlFile =(String) yamlConfig.get("jmxUrlFile");
         }
-
         if (yamlConfig.containsKey("username")) {
           cfg.username = (String)yamlConfig.get("username");
         }
@@ -219,7 +262,16 @@ public class JmxCollector extends Collector implements Collector.Describable {
 
     }
 
-    static String toSnakeAndLowerCase(String attrName) {
+    private static String getJmxUrlFromFile(String jmxUrlFile) {
+		try (BufferedReader reader = new BufferedReader(new FileReader(jmxUrlFile))) {
+			return reader.readLine();
+		} catch (Exception e) {
+			LOGGER.severe("JMX URL file read failed: " + e.toString());
+		}
+		return null;
+	}
+
+	static String toSnakeAndLowerCase(String attrName) {
       if (attrName == null || attrName.isEmpty()) {
         return attrName;
       }
@@ -422,7 +474,7 @@ public class JmxCollector extends Collector implements Collector.Describable {
       }
 
       Receiver receiver = new Receiver();
-      JmxScraper scraper = new JmxScraper(config.jmxUrl, config.username, config.password, config.ssl,
+      JmxScraper scraper = new JmxScraper(config.getJmxUrl(), config.username, config.password, config.ssl,
               config.whitelistObjectNames, config.blacklistObjectNames, receiver, jmxMBeanPropertyCache);
       long start = System.nanoTime();
       double error = 0;

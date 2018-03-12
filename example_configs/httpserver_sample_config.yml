@@ -2,6 +2,11 @@
 hostPort: localhost:5555
 username: 
 password: 
+jmxUrlFile: c:/ib11.0.10.18010906/wlp/usr/servers/cognosserver/logs/state/com.ibm.ws.jmx.local.address
+
+whitelistObjectNames:
+- com.cognos:type=Metrics,service=*
+- java.lang:*
 
 rules:
 - pattern: ".*"
